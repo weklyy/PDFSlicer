@@ -1,0 +1,6 @@
+{
+  "name": "PDF Long Format Slicer",
+  "description": "Split long or wide PDF documents into standard A4 pages for printing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
