@@ -5,7 +5,7 @@
 
 import { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { FileUp, File, Settings2, Download, Loader2, ArrowRight, Languages } from 'lucide-react';
+import { FileUp, File, Settings2, Download, Loader2, ArrowRight, Languages, Maximize, Minimize } from 'lucide-react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -213,6 +213,7 @@ export default function App() {
   const [resultBlob, setResultBlob] = useState<Blob | null>(null);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
   const [numPages, setNumPages] = useState<number | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
     setNumPages(numPages);
@@ -455,14 +456,34 @@ export default function App() {
           </div>
 
           {/* Preview Panel */}
-          <div className="col-span-1 lg:col-span-8 bg-white border border-neutral-200 rounded-xl overflow-hidden h-[600px] lg:h-[800px] flex flex-col shadow-sm">
-            <div className="bg-neutral-50 px-4 py-3 border-b border-neutral-200 flex items-center justify-between z-10">
+          {isFullscreen && (
+            <div 
+              className="fixed inset-0 bg-neutral-900/60 backdrop-blur-sm z-[100]" 
+              onClick={() => setIsFullscreen(false)} 
+            />
+          )}
+          <div className={cn(
+            "bg-white flex flex-col overflow-hidden transition-all",
+            isFullscreen 
+              ? "fixed inset-2 md:inset-6 lg:inset-10 z-[100] rounded-xl shadow-2xl border border-neutral-200/50" 
+              : "border border-neutral-200 rounded-xl shadow-sm col-span-1 lg:col-span-8 h-[600px] lg:h-[800px]"
+          )}>
+            <div className="bg-neutral-50 px-4 py-3 border-b border-neutral-200 flex items-center justify-between z-10 shrink-0">
               <span className="text-sm font-medium text-neutral-600">{t.preview}</span>
-              {resultUrl && (
-                <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded-md font-medium">
-                  {t.readyToPrint}
-                </span>
-              )}
+              <div className="flex items-center gap-3">
+                {resultUrl && (
+                  <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded-md font-medium hidden sm:inline-block">
+                    {t.readyToPrint}
+                  </span>
+                )}
+                <button
+                  onClick={() => setIsFullscreen(!isFullscreen)}
+                  className="p-1.5 text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200/50 rounded-md transition-colors border border-transparent hover:border-neutral-200"
+                  title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                >
+                  {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
+                </button>
+              </div>
             </div>
             
             <div className="flex-1 bg-neutral-200 relative overflow-y-auto w-full h-full custom-scrollbar">
