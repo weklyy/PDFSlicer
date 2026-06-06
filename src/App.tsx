@@ -3,13 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { FileUp, File, Settings2, Download, Loader2, ArrowRight, Languages, Maximize, Minimize } from 'lucide-react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
-import { processPdf, SplitOptions } from './lib/pdfSplitter';
+import { processPdf, SplitOptions, parsePageNumbers } from './lib/pdfSplitter';
 import { cn } from './lib/utils';
 
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
@@ -48,7 +48,15 @@ const dict: Record<Language, Record<string, string>> = {
     readyToPrint: "Ready to print",
     noOutputTitle: "No output generated yet",
     noOutputDesc: "Upload a PDF and click 'Slice PDF' to preview the paginated result here.",
-    processError: "Failed to process PDF. See console for details."
+    processError: "Failed to process PDF. See console for details.",
+    extractPages: "Extract Pages",
+    slicePdfMode: "Slice Mode",
+    extractMode: "Extract Mode",
+    pageSelection: "Page Selection",
+    pageSelectionInput: "e.g. 1, 3, 5-10",
+    extractPdf: "Extract PDF",
+    invalidPagesInfo: "No valid pages to extract.",
+    sourcePdfPages: "pages"
   },
   zh: {
     title: "PDF 分割打印",
@@ -71,7 +79,15 @@ const dict: Record<Language, Record<string, string>> = {
     readyToPrint: "准备打印",
     noOutputTitle: "尚未生成输出",
     noOutputDesc: "上传PDF并点击“分割 PDF”来在此处预览分页打印结果。",
-    processError: "处理PDF失败。详情请查看浏览器控制台。"
+    processError: "处理PDF失败。详情请查看浏览器控制台。",
+    extractPages: "提取页面",
+    slicePdfMode: "分割模式",
+    extractMode: "提取模式",
+    pageSelection: "页码选择",
+    pageSelectionInput: "输入要提取的页码 (如: 1,3,5-10)",
+    extractPdf: "提取 PDF",
+    invalidPagesInfo: "未选择有效的页面。",
+    sourcePdfPages: "页"
   },
   ja: {
     title: "PDF分割印刷",
@@ -94,7 +110,15 @@ const dict: Record<Language, Record<string, string>> = {
     readyToPrint: "印刷の準備ができました",
     noOutputTitle: "出力はまだ生成されていません",
     noOutputDesc: "PDFをアップロードし、「PDFを分割」をクリックして結果をプレビューします。",
-    processError: "PDFの処理に失敗しました。詳細はコンソールを参照してください。"
+    processError: "PDFの処理に失敗しました。詳細はコンソールを参照してください。",
+    extractPages: "ページ抽出",
+    slicePdfMode: "分割モード",
+    extractMode: "抽出モード",
+    pageSelection: "ページ選択",
+    pageSelectionInput: "ページ番号を入力 (例: 1,3,5-10)",
+    extractPdf: "PDFを抽出",
+    invalidPagesInfo: "有効なページがありません。",
+    sourcePdfPages: "ページ"
   },
   ko: {
     title: "PDF 분할 인쇄",
@@ -117,7 +141,15 @@ const dict: Record<Language, Record<string, string>> = {
     readyToPrint: "인쇄 준비 완료",
     noOutputTitle: "아직 생성된 출력이 없습니다",
     noOutputDesc: "PDF를 업로드하고 'PDF 분할'을 클릭하여 결과를 미리 보세요.",
-    processError: "PDF 처리 실패. 자세한 내용은 콘솔을 확인하세요."
+    processError: "PDF 처리 실패. 자세한 내용은 콘솔을 확인하세요.",
+    extractPages: "페이지 추출",
+    slicePdfMode: "분할 모드",
+    extractMode: "추출 모드",
+    pageSelection: "페이지 선택",
+    pageSelectionInput: "페이지 번호 입력 (예: 1,3,5-10)",
+    extractPdf: "PDF 추출",
+    invalidPagesInfo: "유효한 페이지가 없습니다.",
+    sourcePdfPages: "페이지"
   },
   es: {
     title: "Cortador de PDF",
@@ -140,7 +172,15 @@ const dict: Record<Language, Record<string, string>> = {
     readyToPrint: "Listo para imprimir",
     noOutputTitle: "Aún no hay resultados",
     noOutputDesc: "Sube un PDF y haz clic en 'Cortar PDF' para previsualizar aquí.",
-    processError: "Error al procesar el PDF. Consulta la consola."
+    processError: "Error al procesar el PDF. Consulta la consola.",
+    extractPages: "Extraer páginas",
+    slicePdfMode: "Modo de corte",
+    extractMode: "Modo de extracción",
+    pageSelection: "Selección de página",
+    pageSelectionInput: "ej: 1, 3, 5-10",
+    extractPdf: "Extraer PDF",
+    invalidPagesInfo: "No hay páginas válidas.",
+    sourcePdfPages: "páginas"
   },
   fr: {
     title: "Découpeur PDF",
@@ -163,7 +203,15 @@ const dict: Record<Language, Record<string, string>> = {
     readyToPrint: "Prêt à imprimer",
     noOutputTitle: "Aucun résultat généré",
     noOutputDesc: "Téléchargez un PDF et cliquez sur 'Découper' pour prévisualiser.",
-    processError: "Le traitement du PDF a échoué. Voir la console."
+    processError: "Le traitement du PDF a échoué. Voir la console.",
+    extractPages: "Extraire pages",
+    slicePdfMode: "Mode découpe",
+    extractMode: "Mode extraction",
+    pageSelection: "Sélection de pages",
+    pageSelectionInput: "ex: 1, 3, 5-10",
+    extractPdf: "Extraire le PDF",
+    invalidPagesInfo: "Aucune page valide.",
+    sourcePdfPages: "pages"
   },
   de: {
     title: "PDF-Schneider",
@@ -186,7 +234,15 @@ const dict: Record<Language, Record<string, string>> = {
     readyToPrint: "Druckbereit",
     noOutputTitle: "Noch kein Ergebnis",
     noOutputDesc: "Laden Sie ein PDF hoch und klicken Sie auf 'PDF schneiden', um eine Vorschau zu sehen.",
-    processError: "PDF-Verarbeitung fehlgeschlagen. Siehe Konsole für Details."
+    processError: "PDF-Verarbeitung fehlgeschlagen. Siehe Konsole für Details.",
+    extractPages: "Seiten extrahieren",
+    slicePdfMode: "Schneidemodus",
+    extractMode: "Extrahiermodus",
+    pageSelection: "Seitenauswahl",
+    pageSelectionInput: "z.B. 1, 3, 5-10",
+    extractPdf: "PDF extrahieren",
+    invalidPagesInfo: "Keine gültigen Seiten.",
+    sourcePdfPages: "Seiten"
   }
 };
 
@@ -204,6 +260,15 @@ export default function App() {
   const t = dict[lang] || dict['en'];
 
   const [file, setFile] = useState<File | null>(null);
+  const [mode, setMode] = useState<'slice' | 'extract'>('slice');
+  const [pageSelection, setPageSelection] = useState<string>('');
+  const [sourcePageCount, setSourcePageCount] = useState<number | null>(null);
+
+  const parsedPages = useMemo(() => {
+    if (mode !== 'extract' || !pageSelection.trim()) return [];
+    return parsePageNumbers(pageSelection, sourcePageCount || 9999);
+  }, [mode, pageSelection, sourcePageCount]);
+  
   const [options, setOptions] = useState<SplitOptions>({
     direction: 'auto',
     scaleToFit: true,
@@ -219,13 +284,23 @@ export default function App() {
     setNumPages(numPages);
   }
 
-  const onDrop = useCallback((acceptedFiles: File[]) => {
+  const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
-      setFile(acceptedFiles[0]);
+      const selectedFile = acceptedFiles[0];
+      setFile(selectedFile);
       setResultBlob(null);
+      setSourcePageCount(null);
       if (resultUrl) {
         URL.revokeObjectURL(resultUrl);
         setResultUrl(null);
+      }
+      
+      try {
+        const { getPdfPageCount } = await import('./lib/pdfSplitter');
+        const count = await getPdfPageCount(selectedFile);
+        setSourcePageCount(count);
+      } catch (err) {
+        console.error("Failed to get pdf page count", err);
       }
     }
   }, [resultUrl]);
@@ -242,13 +317,23 @@ export default function App() {
     if (!file) return;
     setIsProcessing(true);
     try {
-      const blob = await processPdf(file, options);
+      let blob: Blob;
+      if (mode === 'slice') {
+        blob = await processPdf(file, options);
+      } else {
+        const { extractPdfPages } = await import('./lib/pdfSplitter');
+        blob = await extractPdfPages(file, pageSelection);
+      }
       setResultBlob(blob);
       const url = URL.createObjectURL(blob);
       setResultUrl(url);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Failed to process PDF", error);
-      alert(t.processError);
+      if (error && error.message === "No valid pages selected.") {
+        alert(t.invalidPagesInfo);
+      } else {
+        alert(t.processError);
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -258,7 +343,8 @@ export default function App() {
     if (!resultUrl || !file) return;
     const a = document.createElement('a');
     a.href = resultUrl;
-    a.download = file.name.replace(/\.[^/.]+$/, "") + "_split.pdf";
+    const suffix = mode === 'slice' ? "_split.pdf" : "_extracted.pdf";
+    a.download = file.name.replace(/\.[^/.]+$/, "") + suffix;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -350,81 +436,129 @@ export default function App() {
               )}
             </div>
 
+            {/* Mode selection */}
+            <div className="flex bg-neutral-200/50 p-1 rounded-xl">
+              <button
+                onClick={() => setMode('slice')}
+                className={cn(
+                  "flex-1 py-2.5 text-sm font-medium rounded-lg transition-all",
+                  mode === 'slice' ? "bg-white shadow-sm text-neutral-900" : "text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200/50"
+                )}
+              >
+                {t.slicePdfMode}
+              </button>
+              <button
+                onClick={() => setMode('extract')}
+                className={cn(
+                  "flex-1 py-2.5 text-sm font-medium rounded-lg transition-all",
+                  mode === 'extract' ? "bg-white shadow-sm text-neutral-900" : "text-neutral-500 hover:text-neutral-700 hover:bg-neutral-200/50"
+                )}
+              >
+                {t.extractMode}
+              </button>
+            </div>
+
             {/* Options */}
             <div className="bg-white border text-sm border-neutral-200 rounded-xl p-6 space-y-6">
               <div className="flex items-center gap-2 text-neutral-800 font-medium pb-2 border-b border-neutral-100">
                 <Settings2 size={18} />
-                <h3>{t.options}</h3>
+                <h3>{mode === 'slice' ? t.options : t.extractMode}</h3>
               </div>
 
-              <div className="space-y-4">
-                {/* Slicing Direction */}
-                <div className="space-y-2">
-                  <label className="text-neutral-600 font-medium">{t.direction}</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(['auto', 'horizontal', 'vertical'] as const).map((dir) => (
-                      <button
-                        key={dir}
-                        onClick={() => setOptions({ ...options, direction: dir })}
-                        className={cn(
-                          "px-3 py-2 rounded-lg border text-center transition-all",
-                          options.direction === dir 
-                            ? "bg-neutral-900 border-neutral-900 text-white shadow-sm" 
-                            : "bg-white border-neutral-200 text-neutral-600 hover:bg-neutral-50"
-                        )}
-                      >
-                        {dirLabels[dir]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Paper Orientation */}
-                <div className="space-y-2">
-                  <label className="text-neutral-600 font-medium">{t.orientation}</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {(['portrait', 'landscape'] as const).map((ori) => (
-                      <button
-                        key={ori}
-                        onClick={() => setOptions({ ...options, paperOrientation: ori })}
-                        className={cn(
-                          "px-3 py-2 rounded-lg border text-center transition-all",
-                          options.paperOrientation === ori 
-                            ? "bg-neutral-900 border-neutral-900 text-white shadow-sm" 
-                            : "bg-white border-neutral-200 text-neutral-600 hover:bg-neutral-50"
-                        )}
-                      >
-                        {oriLabels[ori]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Scale to Fit */}
-                <div className="pt-2">
-                  <label className="flex items-start gap-3 cursor-pointer group">
-                    <div className="relative flex items-center justify-center shrink-0 mt-0.5">
-                      <input
-                        type="checkbox"
-                        checked={options.scaleToFit}
-                        onChange={(e) => setOptions({ ...options, scaleToFit: e.target.checked })}
-                        className="peer sr-only"
-                      />
-                      <div className="w-10 h-6 bg-neutral-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-neutral-900"></div>
+              {mode === 'slice' ? (
+                <div className="space-y-4">
+                  {/* Slicing Direction */}
+                  <div className="space-y-2">
+                    <label className="text-neutral-600 font-medium">{t.direction}</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(['auto', 'horizontal', 'vertical'] as const).map((dir) => (
+                        <button
+                          key={dir}
+                          onClick={() => setOptions({ ...options, direction: dir })}
+                          className={cn(
+                            "px-3 py-2 rounded-lg border text-center transition-all",
+                            options.direction === dir 
+                              ? "bg-neutral-900 border-neutral-900 text-white shadow-sm" 
+                              : "bg-white border-neutral-200 text-neutral-600 hover:bg-neutral-50"
+                          )}
+                        >
+                          {dirLabels[dir]}
+                        </button>
+                      ))}
                     </div>
-                    <span className="text-neutral-700 font-medium select-none">{t.scaleToFit}</span>
-                  </label>
+                  </div>
+
+                  {/* Paper Orientation */}
+                  <div className="space-y-2">
+                    <label className="text-neutral-600 font-medium">{t.orientation}</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(['portrait', 'landscape'] as const).map((ori) => (
+                        <button
+                          key={ori}
+                          onClick={() => setOptions({ ...options, paperOrientation: ori })}
+                          className={cn(
+                            "px-3 py-2 rounded-lg border text-center transition-all",
+                            options.paperOrientation === ori 
+                              ? "bg-neutral-900 border-neutral-900 text-white shadow-sm" 
+                              : "bg-white border-neutral-200 text-neutral-600 hover:bg-neutral-50"
+                          )}
+                        >
+                          {oriLabels[ori]}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Scale to Fit */}
+                  <div className="pt-2">
+                    <label className="flex items-start gap-3 cursor-pointer group">
+                      <div className="relative flex items-center justify-center shrink-0 mt-0.5">
+                        <input
+                          type="checkbox"
+                          checked={options.scaleToFit}
+                          onChange={(e) => setOptions({ ...options, scaleToFit: e.target.checked })}
+                          className="peer sr-only"
+                        />
+                        <div className="w-10 h-6 bg-neutral-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-neutral-900"></div>
+                      </div>
+                      <span className="text-neutral-700 font-medium select-none">{t.scaleToFit}</span>
+                    </label>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-neutral-600 font-medium flex justify-between items-center">
+                      <span>{t.pageSelection}</span>
+                      {sourcePageCount ? <span className="text-neutral-400 text-xs">Total: {sourcePageCount} {t.sourcePdfPages}</span> : null}
+                    </label>
+                    <input
+                      type="text"
+                      className="w-full px-3 py-2 border border-neutral-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-400 focus:border-transparent text-neutral-800 placeholder:text-neutral-400"
+                      placeholder={t.pageSelectionInput}
+                      value={pageSelection}
+                      onChange={(e) => setPageSelection(e.target.value)}
+                    />
+                    <div className="flex justify-between items-start mt-1">
+                      <p className="text-xs text-neutral-500">1, 3, 5-10</p>
+                      {pageSelection.trim().length > 0 && (
+                        <p className={cn("text-xs transition-colors", parsedPages.length > 0 ? "text-blue-600 font-medium" : "text-red-500")}>
+                          {parsedPages.length > 0 ? `✓ ${parsedPages.length} ${t.sourcePdfPages}` : t.invalidPagesInfo}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Action Button */}
             <button
               onClick={handleProcess}
-              disabled={!file || isProcessing}
+              disabled={!file || isProcessing || (mode === 'extract' && parsedPages.length === 0)}
               className={cn(
                 "w-full py-3.5 rounded-xl flex items-center justify-center gap-2 font-medium transition-all shadow-sm",
-                !file 
+                (!file || (mode === 'extract' && parsedPages.length === 0))
                   ? "bg-neutral-100 text-neutral-400 cursor-not-allowed"
                   : isProcessing
                     ? "bg-neutral-800 text-neutral-300 cursor-wait"
@@ -438,7 +572,7 @@ export default function App() {
                 </>
               ) : (
                 <>
-                  {t.slicePdf} <ArrowRight size={18} />
+                  {mode === 'slice' ? t.slicePdf : t.extractPdf} <ArrowRight size={18} />
                 </>
               )}
             </button>
