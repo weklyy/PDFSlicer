@@ -23,6 +23,7 @@ import {
   MarginPreset,
   ScaleType,
   formatBytes,
+  resolveImagePageLayout,
 } from '../lib/pdfSplitter';
 import { cn } from '../lib/utils';
 
@@ -223,25 +224,8 @@ export function ImageDetailModal({
   };
 
   const cssFilter = buildImageCssFilter(item.filter, item.brightness, item.contrast);
-
-  // Compute paper preview aspect ratio
-  const effOri =
-    item.orientation !== 'global'
-      ? item.orientation
-      : globalSettings.orientation === 'auto'
-      ? (item.rotation % 180 === 90
-          ? item.naturalHeight > item.naturalWidth
-          : item.naturalWidth > item.naturalHeight)
-        ? 'landscape'
-        : 'portrait'
-      : globalSettings.orientation;
-
-  const paperAspect = effOri === 'landscape' ? 841.89 / 595.28 : 595.28 / 841.89;
-  const effMargin = item.margin === 'global' ? globalSettings.margin : item.margin;
-  const marginPct =
-    effMargin === 'none' ? 0 : effMargin === 'narrow' ? 4.8 : effMargin === 'normal' ? 9.5 : 14.3;
-
-  const effScale = item.scaleType === 'global' ? globalSettings.scaleType : item.scaleType;
+  const layout = resolveImagePageLayout(item, globalSettings);
+  const { paperAspect, effOri, effScale, padXPct, padYPct } = layout;
 
   return (
     <div
@@ -408,14 +392,17 @@ export function ImageDetailModal({
                   width: effOri === 'landscape' ? 'min(100%, 660px)' : 'auto',
                   maxHeight: '100%',
                   maxWidth: '100%',
-                  padding: `${marginPct}%`,
+                  paddingLeft: `${padXPct}%`,
+                  paddingRight: `${padXPct}%`,
+                  paddingTop: `${padYPct}%`,
+                  paddingBottom: `${padYPct}%`,
                 }}
               >
                 <div className="w-full h-full relative overflow-hidden flex items-center justify-center">
                   <CroppedPreviewImage
                     item={item}
                     cssFilter={cssFilter}
-                    fitMode={effScale}
+                    fitMode={globalSettings.paperSize === 'auto' ? 'fit' : effScale}
                   />
                 </div>
               </div>

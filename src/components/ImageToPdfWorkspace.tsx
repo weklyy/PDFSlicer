@@ -43,6 +43,7 @@ import {
   ScaleType,
   formatBytes,
   imagesToPdfAdvanced,
+  resolveImagePageLayout,
 } from '../lib/pdfSplitter';
 import { cn } from '../lib/utils';
 import { ImageDetailModal, CroppedPreviewImage, buildImageCssFilter } from './ImageDetailModal';
@@ -90,7 +91,7 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
   const [settings, setSettings] = useState<GlobalImagePdfSettings>({
     paperSize: 'a4',
     orientation: 'auto',
-    margin: 'narrow',
+    margin: 'none',
     scaleType: 'fit',
     quality: 'high',
     pageNumbers: 'none',
@@ -520,12 +521,24 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
 
   const totalSizeBytes = useMemo(() => images.reduce((acc, i) => acc + i.size, 0), [images]);
 
-  const gridClass =
-    viewDensity === 'compact'
-      ? 'grid-cols-3 sm:grid-cols-4 md:grid-cols-5 xl:grid-cols-6 gap-3'
-      : viewDensity === 'standard'
-      ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-4 gap-4'
-      : 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5';
+  const gridStyle = useMemo<React.CSSProperties>(() => {
+    const minW = viewDensity === 'compact' ? 168 : viewDensity === 'large' ? 300 : 220;
+    return {
+      gridTemplateColumns: `repeat(auto-fill, minmax(${minW}px, 1fr))`,
+    };
+  }, [viewDensity]);
+
+  const wellAspect = useMemo(() => {
+    if (visibleImages.length === 0) return 0.76;
+    if (settings.paperSize !== 'auto' && settings.orientation === 'landscape') return 1.28;
+    if (settings.paperSize !== 'auto' && settings.orientation === 'portrait') return 0.75;
+    let landscapeCount = 0;
+    for (const img of visibleImages) {
+      const l = resolveImagePageLayout(img, settings);
+      if (l.paperAspect > 1.05) landscapeCount++;
+    }
+    return landscapeCount > visibleImages.length / 2 ? 1.28 : 0.76;
+  }, [visibleImages, settings]);
 
   return (
     <div className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-hidden">
@@ -999,36 +1012,30 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
             </div>
           ) : (
             /* 2D Sortable Thumbnail Grid */
-            <div className={cn('grid pb-10', gridClass)}>
+            <div
+              className={cn(
+                'grid pb-10',
+                viewDensity === 'compact' ? 'gap-3' : viewDensity === 'large' ? 'gap-5' : 'gap-4'
+              )}
+              style={gridStyle}
+            >
               {visibleImages.map((img) => {
                 const realIdx = images.findIndex((x) => x.id === img.id);
                 const isSelected = selectedIds.has(img.id);
                 const isDragging = draggingIds.includes(img.id);
                 const dropSide = dropTarget?.id === img.id ? dropTarget.side : null;
                 const cssFilter = buildImageCssFilter(img.filter, img.brightness, img.contrast);
+                const layout = resolveImagePageLayout(img, settings);
+                const fitByHeight = layout.paperAspect <= wellAspect;
+                const needsCanvasThumb =
+                  Boolean(img.crop) || img.rotation % 360 !== 0 || img.flipH || img.flipV;
 
-                const effOri =
-                  img.orientation !== 'global'
-                    ? img.orientation
-                    : settings.orientation === 'auto'
-                    ? (img.rotation % 180 === 90
-                        ? img.naturalHeight > img.naturalWidth
-                        : img.naturalWidth > img.naturalHeight)
-                      ? 'landscape'
-                      : 'portrait'
-                    : settings.orientation;
-
-                const effMargin = img.margin === 'global' ? settings.margin : img.margin;
-                const marginPad =
-                  effMargin === 'none'
-                    ? 'p-0'
-                    : effMargin === 'narrow'
-                    ? 'p-1.5'
-                    : effMargin === 'normal'
-                    ? 'p-3'
-                    : 'p-4';
-
-                const effScale = img.scaleType === 'global' ? settings.scaleType : img.scaleType;
+                const pageBadgeText =
+                  settings.paperSize === 'auto'
+                    ? t.paperAuto
+                    : `${settings.paperSize.toUpperCase()} · ${
+                        layout.effOri === 'portrait' ? t.oriPortrait : t.oriLandscape
+                      }`;
 
                 return (
                   <div
@@ -1056,8 +1063,8 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
                       <div className="absolute -right-2.5 inset-y-1 w-1 rounded-full bg-blue-600 z-20 pointer-events-none" />
                     )}
 
-                    {/* Top Selection Checkbox + Page Index */}
-                    <div className="flex items-center justify-between px-2.5 pt-2 pb-1.5">
+                    {/* Top Selection Checkbox + Page Index & Orientation Info */}
+                    <div className="flex items-center justify-between px-2.5 pt-2 pb-1.5 gap-2">
                       <button
                         type="button"
                         onClick={(e) => {
@@ -1065,7 +1072,7 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
                           handleCardSelect(img.id, e, true);
                         }}
                         className={cn(
-                          'w-5 h-5 rounded flex items-center justify-center border transition-colors',
+                          'w-5 h-5 rounded flex items-center justify-center border transition-colors shrink-0',
                           isSelected
                             ? 'bg-blue-600 border-blue-600 text-white'
                             : 'bg-white border-slate-300 text-transparent group-hover:border-slate-400'
@@ -1075,102 +1082,148 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
                         <Check size={12} strokeWidth={3} />
                       </button>
 
-                      <div className="flex items-center gap-1.5 text-[11px] font-mono-num text-slate-500">
-                        {img.crop && <CropIcon size={11} className="text-blue-600" />}
-                        {img.filter !== 'none' && <Sparkles size={11} className="text-blue-600" />}
-                        <span className="font-semibold text-slate-700">{realIdx + 1}</span>
+                      <div className="flex items-center gap-1.5 text-[11px] font-mono-num text-slate-500 min-w-0">
+                        {img.crop && <CropIcon size={11} className="text-blue-600 shrink-0" />}
+                        {img.filter !== 'none' && <Sparkles size={11} className="text-blue-600 shrink-0" />}
+                        <span className="text-[10px] text-slate-400 truncate">{pageBadgeText}</span>
+                        <span aria-hidden="true" className="text-slate-300">·</span>
+                        <span className="font-semibold text-slate-700 shrink-0">{realIdx + 1}</span>
                       </div>
                     </div>
 
-                    {/* Paper Thumbnail Preview */}
-                    <div className="px-2.5 pb-2 flex-1 flex items-center justify-center min-h-[130px] sm:min-h-[155px]">
-                      <div
-                        className={cn(
-                          'relative bg-white shadow-xs ring-1 ring-black/[0.08] overflow-hidden flex items-center justify-center transition-all',
-                          marginPad
-                        )}
-                        style={{
-                          aspectRatio: effOri === 'landscape' ? '297 / 210' : '210 / 297',
-                          height: effOri === 'portrait' ? (viewDensity === 'compact' ? '124px' : viewDensity === 'large' ? '220px' : '156px') : 'auto',
-                          width: effOri === 'landscape' ? '100%' : 'auto',
-                          maxWidth: '100%',
-                        }}
-                      >
+                    {/* Subtle Gray Canvas Mat + True-Proportion White Paper Sheet */}
+                    <div
+                      className="mx-2 mb-2 rounded-lg bg-[#E9EDF3] overflow-hidden relative"
+                      style={{ aspectRatio: `${wellAspect}` }}
+                    >
+                      <div className="absolute inset-2 flex items-center justify-center">
+                        <div
+                          className="relative bg-white shadow-sm ring-1 ring-slate-900/15 overflow-hidden transition-all"
+                          style={{
+                            aspectRatio: `${layout.pageW} / ${layout.pageH}`,
+                            height: fitByHeight ? '100%' : 'auto',
+                            width: fitByHeight ? 'auto' : '100%',
+                            maxWidth: '100%',
+                            maxHeight: '100%',
+                          }}
+                        >
                         {img.isBlank ? (
-                          <span className="text-[11px] text-slate-400">{t.blankPage}</span>
-                        ) : img.crop ? (
-                          <CroppedPreviewImage
-                            item={img}
-                            cssFilter={cssFilter}
-                            fitMode={effScale}
-                          />
+                          <div className="w-full h-full flex items-center justify-center">
+                            <span className="text-[11px] text-slate-400">{t.blankPage}</span>
+                          </div>
                         ) : (
-                          <img
-                            src={img.url}
-                            alt={img.name}
-                            draggable={false}
-                            className={cn(
-                              'transition-transform duration-150',
-                              effScale === 'fill'
-                                ? 'w-full h-full object-cover'
-                                : 'max-w-full max-h-full object-contain'
-                            )}
+                          <div
+                            className="absolute inset-0 overflow-hidden"
                             style={{
-                              filter: cssFilter,
-                              transform: `rotate(${img.rotation}deg) scaleX(${img.flipH ? -1 : 1}) scaleY(${img.flipV ? -1 : 1})`,
+                              paddingLeft: `${layout.padXPct}%`,
+                              paddingRight: `${layout.padXPct}%`,
+                              paddingTop: `${layout.padYPct}%`,
+                              paddingBottom: `${layout.padYPct}%`,
                             }}
-                          />
+                          >
+                            <div className="w-full h-full relative overflow-hidden flex items-center justify-center">
+                              {needsCanvasThumb ? (
+                                <div
+                                  className="relative flex items-center justify-center shrink-0"
+                                  style={
+                                    layout.effScale === 'original'
+                                      ? {
+                                          width: `${(layout.drawW / Math.max(1, layout.pageW - layout.marginPt * 2)) * 100}%`,
+                                          height: `${(layout.drawH / Math.max(1, layout.pageH - layout.marginPt * 2)) * 100}%`,
+                                        }
+                                      : { width: '100%', height: '100%' }
+                                  }
+                                >
+                                  <CroppedPreviewImage
+                                    item={img}
+                                    cssFilter={cssFilter}
+                                    fitMode={
+                                      settings.paperSize === 'auto'
+                                        ? 'fit'
+                                        : layout.effScale === 'original'
+                                        ? 'fit'
+                                        : layout.effScale
+                                    }
+                                  />
+                                </div>
+                              ) : (
+                                <img
+                                  src={img.url}
+                                  alt={img.name}
+                                  draggable={false}
+                                  className={cn(
+                                    'block shrink-0',
+                                    layout.effScale === 'fill' && settings.paperSize !== 'auto'
+                                      ? 'w-full h-full object-cover'
+                                      : layout.effScale === 'original' && settings.paperSize !== 'auto'
+                                      ? 'max-w-none max-h-none'
+                                      : 'w-full h-full object-contain'
+                                  )}
+                                  style={{
+                                    filter: cssFilter,
+                                    ...(layout.effScale === 'original' && settings.paperSize !== 'auto'
+                                      ? {
+                                          width: `${(layout.drawW / Math.max(1, layout.pageW - layout.marginPt * 2)) * 100}%`,
+                                          height: `${(layout.drawH / Math.max(1, layout.pageH - layout.marginPt * 2)) * 100}%`,
+                                        }
+                                      : {}),
+                                  }}
+                                />
+                              )}
+                            </div>
+                          </div>
                         )}
+                        </div>
+                      </div>
 
-                        {/* Hover quick action bar */}
-                        <div className="absolute inset-x-1.5 bottom-1.5 flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900/80 backdrop-blur-xs rounded-lg p-1">
+                      {/* Hover quick action bar */}
+                      <div className="absolute inset-x-3 bottom-3 flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900/85 backdrop-blur-xs rounded-lg p-1 z-10">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingId(img.id);
+                          }}
+                          className="p-1.5 rounded text-white/90 hover:text-white hover:bg-white/15 transition-colors"
+                          title={t.editPage}
+                        >
+                          <SlidersHorizontal size={13} />
+                        </button>
+                        {!img.isBlank && (
                           <button
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              setEditingId(img.id);
+                              updateImage(img.id, { rotation: (img.rotation + 90) % 360 });
                             }}
                             className="p-1.5 rounded text-white/90 hover:text-white hover:bg-white/15 transition-colors"
-                            title={t.editPage}
+                            title={t.rotateRight}
                           >
-                            <SlidersHorizontal size={13} />
+                            <RotateCw size={13} />
                           </button>
-                          {!img.isBlank && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                updateImage(img.id, { rotation: (img.rotation + 90) % 360 });
-                              }}
-                              className="p-1.5 rounded text-white/90 hover:text-white hover:bg-white/15 transition-colors"
-                              title={t.rotateRight}
-                            >
-                              <RotateCw size={13} />
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleRemoveSingle(img.id);
-                            }}
-                            className="p-1.5 rounded text-red-300 hover:text-red-200 hover:bg-white/15 transition-colors"
-                            title={t.delete}
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemoveSingle(img.id);
+                          }}
+                          className="p-1.5 rounded text-red-300 hover:text-red-200 hover:bg-white/15 transition-colors"
+                          title={t.delete}
+                        >
+                          <Trash2 size={13} />
+                        </button>
                       </div>
                     </div>
 
                     {/* Footer Filename */}
-                    <div className="px-2.5 pb-2.5 pt-1 border-t border-slate-100 flex items-center justify-between gap-2">
+                    <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between gap-2">
                       <span className="text-[11px] font-medium text-slate-600 truncate" title={img.name}>
                         {img.name}
                       </span>
-                      {img.rotation !== 0 && (
+                      {!img.isBlank && img.naturalWidth > 0 && (
                         <span className="text-[10px] font-mono-num text-slate-400 shrink-0">
-                          {img.rotation}°
+                          {img.naturalWidth}×{img.naturalHeight}
                         </span>
                       )}
                     </div>
@@ -1182,7 +1235,7 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
               <button
                 type="button"
                 onClick={() => addInputRef.current?.click()}
-                className="min-h-[190px] rounded-xl border-2 border-dashed border-slate-300/90 hover:border-blue-400 hover:bg-white/70 transition-colors flex flex-col items-center justify-center gap-2 text-slate-500 hover:text-blue-600"
+                className="min-h-[220px] rounded-xl border-2 border-dashed border-slate-300/90 hover:border-blue-400 hover:bg-white/70 transition-colors flex flex-col items-center justify-center gap-2 text-slate-500 hover:text-blue-600"
               >
                 <Plus size={22} />
                 <span className="text-xs font-semibold">{t.addMore}</span>
@@ -1193,8 +1246,8 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
       </div>
 
       {/* Right Inspector Sidebar */}
-      <aside className="w-full lg:w-[320px] xl:w-[340px] bg-white border-t lg:border-t-0 lg:border-l border-slate-200 flex flex-col shrink-0">
-        <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+      <aside className="w-full lg:w-[320px] xl:w-[340px] bg-white border-t lg:border-t-0 lg:border-l border-slate-200 flex flex-col shrink-0 overflow-y-auto">
+        <div className="divide-y divide-slate-100">
           {/* Summary Header */}
           <div className="px-5 py-4 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-slate-900">{t.pageSetup}</h3>
@@ -1442,7 +1495,7 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
         </div>
 
         {/* Sticky Export Footer */}
-        <div className="p-4 border-t border-slate-200 bg-slate-50/70 space-y-2.5 shrink-0">
+        <div className="sticky bottom-0 p-4 border-t border-slate-200 bg-slate-50/95 backdrop-blur-xs space-y-2.5 shrink-0">
           {progress && (
             <div className="space-y-1">
               <div className="flex justify-between text-[11px] font-mono-num text-slate-600">

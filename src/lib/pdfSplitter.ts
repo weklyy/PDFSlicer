@@ -227,6 +227,160 @@ export function computeSlicePlan(
   };
 }
 
+export interface ResolvedImagePageLayout {
+  pageW: number;
+  pageH: number;
+  paperAspect: number;
+  effOri: 'portrait' | 'landscape';
+  marginPt: number;
+  padXPct: number;
+  padYPct: number;
+  effScale: ScaleType;
+  effImgW: number;
+  effImgH: number;
+  drawW: number;
+  drawH: number;
+  drawWPct: number;
+  drawHPct: number;
+}
+
+/**
+ * Single source of truth for page dimensions, orientation, margins, and image placement
+ * shared between thumbnail previews, lightbox editor, and PDF export.
+ */
+export function resolveImagePageLayout(
+  item: ImageItem,
+  settings: GlobalImagePdfSettings,
+  overrideImgSize?: { width: number; height: number }
+): ResolvedImagePageLayout {
+  const effMarginPreset = item.margin === 'global' ? settings.margin : item.margin;
+  const marginPt = MARGIN_PT[effMarginPreset];
+
+  let effImgW: number;
+  let effImgH: number;
+  if (overrideImgSize) {
+    effImgW = Math.max(1, overrideImgSize.width);
+    effImgH = Math.max(1, overrideImgSize.height);
+  } else {
+    const baseW = item.naturalWidth || 595;
+    const baseH = item.naturalHeight || 842;
+    const cropW = item.crop ? item.crop.w * baseW : baseW;
+    const cropH = item.crop ? item.crop.h * baseH : baseH;
+    const rot = ((item.rotation % 360) + 360) % 360;
+    const swapped = rot === 90 || rot === 270;
+    effImgW = Math.max(1, swapped ? cropH : cropW);
+    effImgH = Math.max(1, swapped ? cropW : cropH);
+  }
+
+  let pageW: number;
+  let pageH: number;
+  let effOri: 'portrait' | 'landscape';
+
+  if (item.isBlank) {
+    const sizeKey = settings.paperSize === 'auto' ? 'a4' : settings.paperSize;
+    effOri =
+      item.orientation !== 'global'
+        ? item.orientation
+        : settings.orientation === 'landscape'
+        ? 'landscape'
+        : 'portrait';
+    const dims = getPaperDimensions(sizeKey, effOri);
+    pageW = dims.width;
+    pageH = dims.height;
+  } else if (settings.paperSize === 'auto') {
+    const ptScale = Math.min(1, 842 / Math.max(effImgW, effImgH));
+    pageW = effImgW * ptScale + marginPt * 2;
+    pageH = effImgH * ptScale + marginPt * 2;
+    effOri = pageW > pageH ? 'landscape' : 'portrait';
+  } else {
+    if (item.orientation !== 'global') {
+      effOri = item.orientation;
+    } else if (settings.orientation === 'auto') {
+      effOri = effImgW > effImgH ? 'landscape' : 'portrait';
+    } else {
+      effOri = settings.orientation;
+    }
+    const dims = getPaperDimensions(settings.paperSize, effOri);
+    pageW = dims.width;
+    pageH = dims.height;
+  }
+
+  const effScale = item.scaleType === 'global' ? settings.scaleType : item.scaleType;
+  const availW = Math.max(20, pageW - marginPt * 2);
+  const availH = Math.max(20, pageH - marginPt * 2);
+
+  let drawW = effImgW;
+  let drawH = effImgH;
+
+  if (effScale === 'fit' || settings.paperSize === 'auto') {
+    const s = Math.min(availW / effImgW, availH / effImgH);
+    drawW = effImgW * s;
+    drawH = effImgH * s;
+  } else if (effScale === 'fill') {
+    const s = Math.max(availW / effImgW, availH / effImgH);
+    drawW = effImgW * s;
+    drawH = effImgH * s;
+  } else {
+    // Original pixel size converted at 96dpi -> 72pt (0.75 pt/px), capped so huge photos stay legible unless larger than page
+    drawW = effImgW * 0.75;
+    drawH = effImgH * 0.75;
+  }
+
+  return {
+    pageW,
+    pageH,
+    paperAspect: pageW / pageH,
+    effOri,
+    marginPt,
+    padXPct: (marginPt / pageW) * 100,
+    padYPct: (marginPt / pageH) * 100,
+    effScale,
+    effImgW,
+    effImgH,
+    drawW,
+    drawH,
+    drawWPct: (drawW / pageW) * 100,
+    drawHPct: (drawH / pageH) * 100,
+  };
+}
+
+/**
+ * Checks if a JPEG buffer has an EXIF Orientation tag != 1 so pdf-lib doesn't embed it sideways.
+ */
+function hasNonNormalExifOrientation(buffer: ArrayBuffer): boolean {
+  try {
+    const view = new DataView(buffer);
+    if (view.byteLength < 12 || view.getUint16(0, false) !== 0xffd8) return false;
+    let offset = 2;
+    while (offset + 4 < view.byteLength) {
+      const marker = view.getUint16(offset, false);
+      offset += 2;
+      if (marker === 0xffe1) {
+        if (view.getUint32(offset + 2, false) !== 0x45786966) return false;
+        const little = view.getUint16(offset + 8, false) === 0x4949;
+        const ifdOffset = offset + 8 + view.getUint32(offset + 12, little);
+        if (ifdOffset + 2 > view.byteLength) return false;
+        const entries = view.getUint16(ifdOffset, little);
+        for (let i = 0; i < entries; i++) {
+          const entry = ifdOffset + 2 + i * 12;
+          if (entry + 10 > view.byteLength) break;
+          if (view.getUint16(entry, little) === 0x0112) {
+            return view.getUint16(entry + 8, little) !== 1;
+          }
+        }
+        return false;
+      } else if ((marker & 0xff00) !== 0xff00) {
+        break;
+      } else {
+        offset += view.getUint16(offset, false);
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 function loadHtmlImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -241,7 +395,7 @@ async function renderProcessedImageBytes(
   item: ImageItem,
   quality: QualityPreset
 ): Promise<{ bytes: Uint8Array; format: 'jpg' | 'png'; width: number; height: number }> {
-  const needsCanvas =
+  let needsCanvas =
     Boolean(item.crop) ||
     item.flipH ||
     item.flipV ||
@@ -256,12 +410,16 @@ async function renderProcessedImageBytes(
   if (!needsCanvas && item.file) {
     const buf = await item.file.arrayBuffer();
     const isPng = item.file.type.toLowerCase() === 'image/png';
-    return {
-      bytes: new Uint8Array(buf),
-      format: isPng ? 'png' : 'jpg',
-      width: item.naturalWidth || 1000,
-      height: item.naturalHeight || 1000,
-    };
+    if (!isPng && hasNonNormalExifOrientation(buf)) {
+      needsCanvas = true;
+    } else {
+      return {
+        bytes: new Uint8Array(buf),
+        format: isPng ? 'png' : 'jpg',
+        width: item.naturalWidth || 1000,
+        height: item.naturalHeight || 1000,
+      };
+    }
   }
 
   const htmlImg = await loadHtmlImage(item.url);
@@ -385,54 +543,13 @@ export async function imagesToPdfAdvanced(
         ? await pdfDoc.embedPng(processed.bytes)
         : await pdfDoc.embedJpg(processed.bytes);
 
-    const imgW = pdfImage.width;
-    const imgH = pdfImage.height;
-
-    let pageW: number;
-    let pageH: number;
-
-    if (settings.paperSize === 'auto') {
-      // Match image aspect ratio scaled to a reasonable print DPI (72pt/in capped around A4 width/height)
-      const ptScale = Math.min(1, 842 / Math.max(imgW, imgH));
-      pageW = imgW * ptScale + marginPt * 2;
-      pageH = imgH * ptScale + marginPt * 2;
-    } else {
-      let ori: 'portrait' | 'landscape';
-      if (item.orientation !== 'global') {
-        ori = item.orientation;
-      } else if (settings.orientation === 'auto') {
-        ori = imgW > imgH ? 'landscape' : 'portrait';
-      } else {
-        ori = settings.orientation;
-      }
-      const dims = getPaperDimensions(settings.paperSize, ori);
-      pageW = dims.width;
-      pageH = dims.height;
-    }
+    const layout = resolveImagePageLayout(item, settings, {
+      width: pdfImage.width,
+      height: pdfImage.height,
+    });
+    const { pageW, pageH, drawW, drawH } = layout;
 
     const page = pdfDoc.addPage([pageW, pageH]);
-
-    const effScale = item.scaleType === 'global' ? settings.scaleType : item.scaleType;
-    const availW = Math.max(20, pageW - marginPt * 2);
-    const availH = Math.max(20, pageH - marginPt * 2);
-
-    let drawW = imgW;
-    let drawH = imgH;
-
-    if (effScale === 'fit' || settings.paperSize === 'auto') {
-      const s = Math.min(availW / imgW, availH / imgH);
-      drawW = imgW * s;
-      drawH = imgH * s;
-    } else if (effScale === 'fill') {
-      const s = Math.max(availW / imgW, availH / imgH);
-      drawW = imgW * s;
-      drawH = imgH * s;
-    } else {
-      // original (72 dpi px->pt)
-      drawW = imgW * 0.75;
-      drawH = imgH * 0.75;
-    }
-
     const x = (pageW - drawW) / 2;
     const y = (pageH - drawH) / 2;
 

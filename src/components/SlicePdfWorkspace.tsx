@@ -409,8 +409,8 @@ export function SlicePdfWorkspace({ t, onNotify }: SlicePdfWorkspaceProps) {
       </div>
 
       {/* Right Inspector */}
-      <aside className="w-full lg:w-[320px] xl:w-[340px] bg-white border-t lg:border-t-0 lg:border-l border-slate-200 flex flex-col shrink-0">
-        <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+      <aside className="w-full lg:w-[320px] xl:w-[340px] bg-white border-t lg:border-t-0 lg:border-l border-slate-200 flex flex-col shrink-0 overflow-y-auto">
+        <div className="divide-y divide-slate-100">
           {/* Header & Live Metrics */}
           <div className="px-5 py-4 space-y-2">
             <h3 className="text-sm font-semibold text-slate-900">{t.sliceTitle}</h3>
@@ -603,7 +603,7 @@ export function SlicePdfWorkspace({ t, onNotify }: SlicePdfWorkspaceProps) {
         </div>
 
         {/* Sticky Export CTA */}
-        <div className="p-4 border-t border-slate-200 bg-slate-50/70 space-y-2.5 shrink-0">
+        <div className="sticky bottom-0 p-4 border-t border-slate-200 bg-slate-50/95 backdrop-blur-xs space-y-2.5 shrink-0">
           <button
             onClick={handleSlice}
             disabled={!file || isProcessing}
