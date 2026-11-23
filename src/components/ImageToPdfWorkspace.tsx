@@ -29,6 +29,9 @@ import {
   Sparkles,
   Check,
   X,
+  Wand2,
+  ChevronDown,
+  RotateCcw as RestoreIcon,
 } from 'lucide-react';
 import { Dictionary } from '../lib/i18n';
 import {
@@ -45,8 +48,19 @@ import {
   imagesToPdfAdvanced,
   resolveImagePageLayout,
 } from '../lib/pdfSplitter';
+import {
+  AiEnhanceMode,
+  detectWhiteBorders,
+  hasAdvancedPixelEdits,
+} from '../lib/imageProcessor';
+import { AiEnhanceClientError, requestAiEnhancement } from '../lib/aiEnhanceClient';
 import { cn } from '../lib/utils';
-import { ImageDetailModal, CroppedPreviewImage, buildImageCssFilter } from './ImageDetailModal';
+import {
+  ImageDetailModal,
+  CroppedPreviewImage,
+  EditorTab,
+  LocalEnhanceSyncPayload,
+} from './ImageDetailModal';
 import { PdfResultModal } from './PdfResultModal';
 
 interface ImageToPdfWorkspaceProps {
@@ -87,6 +101,19 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
   const [moveTargetInput, setMoveTargetInput] = useState('1');
 
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTab, setEditingTab] = useState<EditorTab>('transform');
+
+  // Auto white-border trim on upload (default ON per user preference)
+  const [autoTrimOnUpload, setAutoTrimOnUpload] = useState(true);
+  const [isAutoTrimming, setIsAutoTrimming] = useState(false);
+
+  // Batch dropdown menus & batch AI progress
+  const [batchEnhanceOpen, setBatchEnhanceOpen] = useState(false);
+  const [batchAiOpen, setBatchAiOpen] = useState(false);
+  const [batchAiProgress, setBatchAiProgress] = useState<{ current: number; total: number } | null>(
+    null
+  );
+  const batchAiAbortRef = useRef<AbortController | null>(null);
 
   const [settings, setSettings] = useState<GlobalImagePdfSettings>({
     paperSize: 'a4',
@@ -112,12 +139,20 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
 
   const addInputRef = useRef<HTMLInputElement>(null);
   const sortRef = useRef<HTMLDivElement>(null);
+  const batchEnhanceRef = useRef<HTMLDivElement>(null);
+  const batchAiRef = useRef<HTMLDivElement>(null);
 
-  // Close sort menu on outside click
+  // Close dropdown menus on outside click
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
       if (sortRef.current && !sortRef.current.contains(e.target as Node)) {
         setSortOpen(false);
+      }
+      if (batchEnhanceRef.current && !batchEnhanceRef.current.contains(e.target as Node)) {
+        setBatchEnhanceOpen(false);
+      }
+      if (batchAiRef.current && !batchAiRef.current.contains(e.target as Node)) {
+        setBatchAiOpen(false);
       }
     };
     document.addEventListener('mousedown', onDocClick);
@@ -178,10 +213,20 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
       const validFiles = files.filter((f) => f.type.startsWith('image/'));
       if (validFiles.length === 0) return;
 
+      let trimmedCount = 0;
       const created: ImageItem[] = await Promise.all(
         validFiles.map(async (file) => {
           const url = URL.createObjectURL(file);
           const dims = await readImageDimensions(url);
+          let detectedCrop = null;
+          if (autoTrimOnUpload) {
+            try {
+              detectedCrop = await detectWhiteBorders(url, { sensitivity: 55, paddingPct: 2 });
+              if (detectedCrop) trimmedCount++;
+            } catch {
+              detectedCrop = null;
+            }
+          }
           return {
             id: uid(),
             file,
@@ -200,14 +245,27 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
             filter: 'none',
             brightness: 100,
             contrast: 100,
-            crop: null,
+            crop: detectedCrop,
+            cropMode: detectedCrop ? 'rect' : 'none',
+            autoTrimApplied: Boolean(detectedCrop),
+            autoTrimSensitivity: 55,
+            autoTrimPadding: 2,
+            sharpen: 0,
+            denoiseShadow: 0,
+            localUpscale: false,
+            watermarkRemoval: { enabled: false, strength: 55, removeColorStamps: false },
+            eraseStrokes: [],
+            aiEnhanced: null,
           };
         })
       );
 
       commitImages((prev) => [...prev, ...created]);
+      if (autoTrimOnUpload && trimmedCount > 0) {
+        onNotify('success', t.autoTrimResultToast.replace('{n}', String(trimmedCount)));
+      }
     },
-    [commitImages]
+    [commitImages, autoTrimOnUpload, onNotify, t.autoTrimResultToast]
   );
 
   const handleInsertBlank = () => {
@@ -422,11 +480,181 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
     setSortOpen(false);
   };
 
-  const handleApplyFilterToAll = (filter: ImageFilterType, brightness: number, contrast: number) => {
+  const handleApplyEnhanceToAll = (payload: LocalEnhanceSyncPayload) => {
     commitImages((prev) =>
-      prev.map((img) => (img.isBlank ? img : { ...img, filter, brightness, contrast }))
+      prev.map((img) =>
+        img.isBlank
+          ? img
+          : {
+              ...img,
+              filter: payload.filter,
+              brightness: payload.brightness,
+              contrast: payload.contrast,
+              sharpen: payload.sharpen,
+              denoiseShadow: payload.denoiseShadow,
+              localUpscale: payload.localUpscale,
+              watermarkRemoval: { ...payload.watermarkRemoval },
+              aiEnhanced: img.aiEnhanced ? { ...img.aiEnhanced, active: false } : null,
+            }
+      )
     );
     onNotify('success', t.filterAppliedAll);
+  };
+
+  const runBatchAutoTrim = async (targetIds: Set<string> | null) => {
+    const candidates = images.filter(
+      (img) => !img.isBlank && (targetIds === null || targetIds.has(img.id))
+    );
+    if (candidates.length === 0) return;
+
+    setIsAutoTrimming(true);
+    try {
+      const updates = new Map<string, ImageItem['crop']>();
+      await Promise.all(
+        candidates.map(async (img) => {
+          try {
+            const rect = await detectWhiteBorders(img.url, {
+              sensitivity: img.autoTrimSensitivity ?? 55,
+              paddingPct: img.autoTrimPadding ?? 2,
+            });
+            if (rect) updates.set(img.id, rect);
+          } catch {
+            // skip individual failure
+          }
+        })
+      );
+
+      if (updates.size === 0) {
+        onNotify('info', t.autoTrimNoneFound);
+        return;
+      }
+
+      commitImages((prev) =>
+        prev.map((img) => {
+          const rect = updates.get(img.id);
+          if (!rect) return img;
+          return {
+            ...img,
+            cropMode: 'rect',
+            crop: rect,
+            autoTrimApplied: true,
+            aiEnhanced: img.aiEnhanced ? { ...img.aiEnhanced, active: false } : null,
+          };
+        })
+      );
+      onNotify('success', t.autoTrimResultToast.replace('{n}', String(updates.size)));
+    } finally {
+      setIsAutoTrimming(false);
+    }
+  };
+
+  const handleBatchRestoreCrop = () => {
+    if (selectedIds.size === 0) return;
+    commitImages((prev) =>
+      prev.map((img) =>
+        selectedIds.has(img.id)
+          ? {
+              ...img,
+              cropMode: 'none',
+              crop: null,
+              autoTrimApplied: false,
+              perspectiveQuad: null,
+              polygon: null,
+            }
+          : img
+      )
+    );
+  };
+
+  const handleBatchEnhancePreset = (
+    preset: 'cleanDoc' | 'bw' | 'watermark' | 'hd' | 'reset'
+  ) => {
+    if (selectedIds.size === 0) return;
+    setBatchEnhanceOpen(false);
+    commitImages((prev) =>
+      prev.map((img) => {
+        if (!selectedIds.has(img.id) || img.isBlank) return img;
+        const pausedAi = img.aiEnhanced ? { ...img.aiEnhanced, active: false } : null;
+        if (preset === 'cleanDoc') {
+          return { ...img, filter: 'cleanDoc', sharpen: 45, denoiseShadow: 65, aiEnhanced: pausedAi };
+        }
+        if (preset === 'bw') {
+          return { ...img, filter: 'bw', sharpen: 35, denoiseShadow: 70, aiEnhanced: pausedAi };
+        }
+        if (preset === 'watermark') {
+          return {
+            ...img,
+            watermarkRemoval: { enabled: true, strength: 62, removeColorStamps: false },
+            aiEnhanced: pausedAi,
+          };
+        }
+        if (preset === 'hd') {
+          return { ...img, localUpscale: true, sharpen: Math.max(img.sharpen ?? 0, 32), aiEnhanced: pausedAi };
+        }
+        return {
+          ...img,
+          filter: 'none',
+          brightness: 100,
+          contrast: 100,
+          sharpen: 0,
+          denoiseShadow: 0,
+          localUpscale: false,
+          watermarkRemoval: { enabled: false, strength: 55, removeColorStamps: false },
+          eraseStrokes: [],
+          aiEnhanced: null,
+        };
+      })
+    );
+    onNotify('success', t.batchEnhancedToast);
+  };
+
+  const handleBatchAiRestore = async (mode: AiEnhanceMode) => {
+    setBatchAiOpen(false);
+    const targets = images.filter((img) => selectedIds.has(img.id) && !img.isBlank);
+    if (targets.length === 0) return;
+
+    const controller = new AbortController();
+    batchAiAbortRef.current = controller;
+    setBatchAiProgress({ current: 0, total: targets.length });
+
+    let succeeded = 0;
+    for (let i = 0; i < targets.length; i++) {
+      if (controller.signal.aborted) break;
+      setBatchAiProgress({ current: i + 1, total: targets.length });
+      const target = targets[i];
+      try {
+        const aiRes = await requestAiEnhancement(target, mode, controller.signal);
+        updateImage(target.id, { aiEnhanced: aiRes });
+        succeeded++;
+      } catch (err: unknown) {
+        const e = err as AiEnhanceClientError;
+        if (e.errorCode === 'ABORTED') break;
+        if (e.errorCode === 'API_KEY_MISSING') {
+          onNotify('error', t.aiKeyMissingTip);
+          break;
+        }
+        if (e.errorCode === 'API_KEY_INVALID') {
+          onNotify('error', t.aiKeyInvalidTip);
+          break;
+        }
+        if (e.errorCode === 'QUOTA_EXCEEDED') {
+          onNotify('error', t.aiQuotaTip);
+          break;
+        }
+        onNotify('error', e.message || t.processError);
+      }
+    }
+
+    setBatchAiProgress(null);
+    batchAiAbortRef.current = null;
+    if (succeeded > 0) {
+      onNotify('success', `${t.tagAi} (${succeeded}/${targets.length})`);
+    }
+  };
+
+  const openEditor = (id: string, tab: EditorTab = 'transform') => {
+    setEditingTab(tab);
+    setEditingId(id);
   };
 
   // 2D Multi-Select Drag & Drop Reorder
@@ -589,8 +817,32 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
               <span className="hidden sm:inline">{t.insertBlankPage}</span>
             </button>
 
+            {/* Upload Auto-Trim White Borders Switch (default ON) */}
+            <label className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50/70 hover:bg-slate-100/70 text-xs font-medium text-slate-700 cursor-pointer select-none whitespace-nowrap shrink-0 transition-colors">
+              <input
+                type="checkbox"
+                checked={autoTrimOnUpload}
+                onChange={(e) => setAutoTrimOnUpload(e.target.checked)}
+                className="h-3.5 w-3.5 accent-blue-600 rounded"
+              />
+              <span>{t.autoTrimOnUpload}</span>
+            </label>
+
             {images.length > 0 && (
               <>
+                <button
+                  onClick={() => runBatchAutoTrim(null)}
+                  disabled={isAutoTrimming}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50 text-slate-700 text-xs font-medium transition-colors whitespace-nowrap shrink-0"
+                >
+                  {isAutoTrimming ? (
+                    <Loader2 size={13} className="animate-spin text-blue-600" />
+                  ) : (
+                    <CropIcon size={13} className="text-blue-600" />
+                  )}
+                  <span>{t.autoTrimAll}</span>
+                </button>
+
                 <div className="w-px h-5 bg-slate-200 mx-1" />
 
                 {/* Sort Dropdown */}
@@ -731,6 +983,26 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
           )}
         </div>
 
+        {/* Batch AI Progress Strip */}
+        {batchAiProgress && (
+          <div className="px-4 py-2 bg-slate-900 text-white flex items-center justify-between gap-3 shrink-0">
+            <div className="flex items-center gap-2 text-xs font-medium">
+              <Loader2 size={14} className="animate-spin text-blue-400" />
+              <span className="font-mono-num">
+                {t.batchAiProgress
+                  .replace('{cur}', String(batchAiProgress.current))
+                  .replace('{total}', String(batchAiProgress.total))}
+              </span>
+            </div>
+            <button
+              onClick={() => batchAiAbortRef.current?.abort()}
+              className="px-2.5 py-1 rounded-md bg-white/10 hover:bg-white/20 text-xs font-medium transition-colors"
+            >
+              {t.batchAiStop}
+            </button>
+          </div>
+        )}
+
         {/* Batch Operations Bar (visible whenever >= 1 item selected) */}
         {selectedIds.size > 0 && (
           <div className="px-4 py-2 bg-blue-50/90 border-b border-blue-200/80 flex flex-wrap items-center justify-between gap-2 shrink-0">
@@ -753,32 +1025,112 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
             </div>
 
             <div className="flex items-center gap-1.5 flex-wrap">
+              {/* Batch Auto-Trim & Restore Crop */}
+              <button
+                onClick={() => runBatchAutoTrim(selectedIds)}
+                disabled={isAutoTrimming}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-white border border-blue-200/80 text-slate-700 hover:text-blue-700 text-xs font-medium transition-colors whitespace-nowrap"
+              >
+                <CropIcon size={13} className="text-blue-600" />
+                <span>{t.autoTrimSelected}</span>
+              </button>
+              <button
+                onClick={handleBatchRestoreCrop}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white border border-blue-200/80 text-slate-600 hover:text-slate-900 text-xs font-medium transition-colors whitespace-nowrap"
+                title={t.restoreCrop}
+              >
+                <RestoreIcon size={12} />
+                <span className="hidden xl:inline">{t.restoreCrop}</span>
+              </button>
+
+              {/* Batch Local Enhance Dropdown */}
+              <div className="relative" ref={batchEnhanceRef}>
+                <button
+                  onClick={() => setBatchEnhanceOpen((o) => !o)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-white border border-blue-200/80 text-slate-700 hover:text-blue-700 text-xs font-medium transition-colors whitespace-nowrap"
+                >
+                  <Sparkles size={13} className="text-blue-600" />
+                  <span>{t.batchEnhance}</span>
+                  <ChevronDown size={12} className="text-slate-400" />
+                </button>
+                {batchEnhanceOpen && (
+                  <div className="absolute right-0 top-full mt-1.5 w-52 rounded-lg border border-slate-200 bg-white shadow-lg py-1 z-30">
+                    {(
+                      [
+                        ['cleanDoc', t.batchCleanDoc],
+                        ['bw', t.batchBwScan],
+                        ['watermark', t.batchLocalWatermark],
+                        ['hd', t.batchLocalHd],
+                        ['reset', t.batchResetEnhance],
+                      ] as const
+                    ).map(([presetKey, label]) => (
+                      <button
+                        key={presetKey}
+                        onClick={() => handleBatchEnhancePreset(presetKey)}
+                        className="w-full px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Batch AI Restoration Dropdown */}
+              <div className="relative" ref={batchAiRef}>
+                <button
+                  onClick={() => setBatchAiOpen((o) => !o)}
+                  disabled={Boolean(batchAiProgress)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-medium transition-colors whitespace-nowrap"
+                >
+                  <Wand2 size={12} />
+                  <span>{t.batchAiAction}</span>
+                  <ChevronDown size={12} className="text-slate-300" />
+                </button>
+                {batchAiOpen && (
+                  <div className="absolute right-0 top-full mt-1.5 w-48 rounded-lg border border-slate-200 bg-white shadow-lg py-1 z-30">
+                    {(
+                      [
+                        ['watermark', t.aiWatermarkBtn],
+                        ['hd', t.aiHdBtn],
+                        ['both', t.aiBothBtn],
+                      ] as Array<[AiEnhanceMode, string]>
+                    ).map(([aiMode, label]) => (
+                      <button
+                        key={aiMode}
+                        onClick={() => handleBatchAiRestore(aiMode)}
+                        className="w-full px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-blue-700 transition-colors"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="w-px h-4 bg-blue-200 mx-0.5" />
+
               <button
                 onClick={() => handleBatchRotate(-90)}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-white border border-blue-200/80 text-slate-700 hover:text-slate-900 text-xs font-medium transition-colors"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white border border-blue-200/80 text-slate-700 hover:text-slate-900 text-xs font-medium transition-colors"
                 title={t.rotateLeft}
               >
                 <RotateCcw size={13} />
-                <span className="hidden md:inline">-90°</span>
               </button>
               <button
                 onClick={() => handleBatchRotate(90)}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-white border border-blue-200/80 text-slate-700 hover:text-slate-900 text-xs font-medium transition-colors"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white border border-blue-200/80 text-slate-700 hover:text-slate-900 text-xs font-medium transition-colors"
                 title={t.rotateRight}
               >
                 <RotateCw size={13} />
-                <span className="hidden md:inline">+90°</span>
               </button>
               <button
                 onClick={handleBatchDuplicate}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-white border border-blue-200/80 text-slate-700 hover:text-slate-900 text-xs font-medium transition-colors"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white border border-blue-200/80 text-slate-700 hover:text-slate-900 text-xs font-medium transition-colors"
                 title={t.duplicate}
               >
                 <Copy size={13} />
-                <span className="hidden md:inline">{t.duplicate}</span>
               </button>
-
-              <div className="w-px h-4 bg-blue-200 mx-0.5" />
 
               <button
                 onClick={() => handleMoveSelectedToIndex(1)}
@@ -802,10 +1154,10 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
                     setMoveTargetInput('1');
                     setMovePopoverOpen((o) => !o);
                   }}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-white border border-blue-200/80 text-slate-700 hover:text-slate-900 text-xs font-medium transition-colors"
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white border border-blue-200/80 text-slate-700 hover:text-slate-900 text-xs font-medium transition-colors"
+                  title={t.moveToPosition}
                 >
                   <CornerDownRight size={13} />
-                  {t.moveToPosition}
                 </button>
                 {movePopoverOpen && (
                   <div className="absolute right-0 top-full mt-1.5 p-2.5 bg-white rounded-lg border border-slate-200 shadow-lg z-30 flex items-center gap-1.5 w-48">
@@ -897,7 +1249,18 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
                 const isSelected = selectedIds.has(img.id);
                 const isDragging = draggingIds.includes(img.id);
                 const dropSide = dropTarget?.id === img.id ? dropTarget.side : null;
-                const cssFilter = buildImageCssFilter(img.filter, img.brightness, img.contrast);
+                const needsCanvas = hasAdvancedPixelEdits(img);
+                const traits: string[] = [];
+                if (img.cropMode === 'perspective') traits.push(t.tagPerspective);
+                else if (img.cropMode === 'polygon') traits.push(t.tagPolygon);
+                else if (img.autoTrimApplied) traits.push(t.tagAutoTrim);
+                else if (img.crop) traits.push(t.tagCropped);
+                if (img.aiEnhanced?.active) traits.push(t.tagAi);
+                else {
+                  if ((img.sharpen ?? 0) > 0) traits.push(t.tagSharpen);
+                  if (img.localUpscale) traits.push(t.tagHd);
+                  if (img.watermarkRemoval?.enabled) traits.push(t.tagDeWatermark);
+                }
 
                 return (
                   <div
@@ -908,7 +1271,7 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
                     onDrop={(e) => handleItemDrop(img.id, e)}
                     onDragEnd={handleItemDragEnd}
                     onClick={(e) => handleCardSelect(img.id, e)}
-                    onDoubleClick={() => setEditingId(img.id)}
+                    onDoubleClick={() => openEditor(img.id, 'transform')}
                     className={cn(
                       'relative flex items-center gap-3 px-4 py-2.5 select-none transition-colors cursor-grab active:cursor-grabbing',
                       isSelected ? 'bg-blue-50/70' : 'hover:bg-slate-50/80',
@@ -944,37 +1307,47 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
                     <div className="w-10 h-12 rounded border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center shrink-0">
                       {img.isBlank ? (
                         <span className="text-[9px] text-slate-400">BLANK</span>
+                      ) : needsCanvas ? (
+                        <CroppedPreviewImage item={img} fitMode="fit" maxPreview={140} />
                       ) : (
                         <img
                           src={img.url}
                           alt={img.name}
                           className="max-w-full max-h-full object-contain"
-                          style={{
-                            filter: cssFilter,
-                            transform: `rotate(${img.rotation}deg) scaleX(${img.flipH ? -1 : 1}) scaleY(${img.flipV ? -1 : 1})`,
-                          }}
                         />
                       )}
                     </div>
 
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-semibold text-slate-800 truncate">{img.name}</p>
-                      <p className="text-[11px] text-slate-500 font-mono-num">
+                      <p className="text-[11px] text-slate-500 font-mono-num truncate">
                         {img.isBlank
                           ? t.blankPage
                           : `${img.naturalWidth}×${img.naturalHeight} · ${formatBytes(img.size)}`}
                         {img.rotation !== 0 ? ` · ${img.rotation}°` : ''}
-                        {img.crop ? ' · Cropped' : ''}
-                        {img.filter !== 'none' ? ` · ${img.filter}` : ''}
+                        {traits.length > 0 ? ` · ${traits.join(' · ')}` : ''}
                       </p>
                     </div>
 
                     <div className="flex items-center gap-1 shrink-0">
+                      {!img.isBlank && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openEditor(img.id, 'crop');
+                          }}
+                          className="p-1.5 rounded-md text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                          title={t.tabCrop}
+                        >
+                          <CropIcon size={14} />
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          setEditingId(img.id);
+                          openEditor(img.id, 'enhance');
                         }}
                         className="p-1.5 rounded-md text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
                         title={t.editPage}
@@ -1024,11 +1397,9 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
                 const isSelected = selectedIds.has(img.id);
                 const isDragging = draggingIds.includes(img.id);
                 const dropSide = dropTarget?.id === img.id ? dropTarget.side : null;
-                const cssFilter = buildImageCssFilter(img.filter, img.brightness, img.contrast);
                 const layout = resolveImagePageLayout(img, settings);
                 const fitByHeight = layout.paperAspect <= wellAspect;
-                const needsCanvasThumb =
-                  Boolean(img.crop) || img.rotation % 360 !== 0 || img.flipH || img.flipV;
+                const needsCanvasThumb = hasAdvancedPixelEdits(img);
 
                 const pageBadgeText =
                   settings.paperSize === 'auto'
@@ -1036,6 +1407,18 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
                     : `${settings.paperSize.toUpperCase()} · ${
                         layout.effOri === 'portrait' ? t.oriPortrait : t.oriLandscape
                       }`;
+
+                const cardTraits: string[] = [];
+                if (img.cropMode === 'perspective') cardTraits.push(t.tagPerspective);
+                else if (img.cropMode === 'polygon') cardTraits.push(t.tagPolygon);
+                else if (img.autoTrimApplied) cardTraits.push(t.tagAutoTrim);
+                else if (img.crop) cardTraits.push(t.tagCropped);
+                if (img.aiEnhanced?.active) cardTraits.push(t.tagAi);
+                else {
+                  if ((img.sharpen ?? 0) > 0) cardTraits.push(t.tagSharpen);
+                  if (img.localUpscale) cardTraits.push(t.tagHd);
+                  if (img.watermarkRemoval?.enabled) cardTraits.push(t.tagDeWatermark);
+                }
 
                 return (
                   <div
@@ -1046,7 +1429,7 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
                     onDrop={(e) => handleItemDrop(img.id, e)}
                     onDragEnd={handleItemDragEnd}
                     onClick={(e) => handleCardSelect(img.id, e)}
-                    onDoubleClick={() => setEditingId(img.id)}
+                    onDoubleClick={() => openEditor(img.id, 'transform')}
                     className={cn(
                       'group relative flex flex-col rounded-xl bg-white border transition-all select-none cursor-grab active:cursor-grabbing',
                       isSelected
@@ -1063,7 +1446,7 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
                       <div className="absolute -right-2.5 inset-y-1 w-1 rounded-full bg-blue-600 z-20 pointer-events-none" />
                     )}
 
-                    {/* Top Selection Checkbox + Page Index & Orientation Info */}
+                    {/* Top Selection Checkbox + Page Index & Clean Unboxed Traits */}
                     <div className="flex items-center justify-between px-2.5 pt-2 pb-1.5 gap-2">
                       <button
                         type="button"
@@ -1083,9 +1466,15 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
                       </button>
 
                       <div className="flex items-center gap-1.5 text-[11px] font-mono-num text-slate-500 min-w-0">
-                        {img.crop && <CropIcon size={11} className="text-blue-600 shrink-0" />}
-                        {img.filter !== 'none' && <Sparkles size={11} className="text-blue-600 shrink-0" />}
-                        <span className="text-[10px] text-slate-400 truncate">{pageBadgeText}</span>
+                        {cardTraits.length > 0 ? (
+                          <span className="text-[10px] font-medium text-blue-600 truncate">
+                            {cardTraits.slice(0, 2).join(' · ')}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-slate-400 truncate">
+                            {pageBadgeText}
+                          </span>
+                        )}
                         <span aria-hidden="true" className="text-slate-300">·</span>
                         <span className="font-semibold text-slate-700 shrink-0">{realIdx + 1}</span>
                       </div>
@@ -1136,7 +1525,7 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
                                 >
                                   <CroppedPreviewImage
                                     item={img}
-                                    cssFilter={cssFilter}
+                                    maxPreview={420}
                                     fitMode={
                                       settings.paperSize === 'auto'
                                         ? 'fit'
@@ -1159,15 +1548,14 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
                                       ? 'max-w-none max-h-none'
                                       : 'w-full h-full object-contain'
                                   )}
-                                  style={{
-                                    filter: cssFilter,
-                                    ...(layout.effScale === 'original' && settings.paperSize !== 'auto'
+                                  style={
+                                    layout.effScale === 'original' && settings.paperSize !== 'auto'
                                       ? {
                                           width: `${(layout.drawW / Math.max(1, layout.pageW - layout.marginPt * 2)) * 100}%`,
                                           height: `${(layout.drawH / Math.max(1, layout.pageH - layout.marginPt * 2)) * 100}%`,
                                         }
-                                      : {}),
-                                  }}
+                                      : undefined
+                                  }
                                 />
                               )}
                             </div>
@@ -1178,11 +1566,24 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
 
                       {/* Hover quick action bar */}
                       <div className="absolute inset-x-3 bottom-3 flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900/85 backdrop-blur-xs rounded-lg p-1 z-10">
+                        {!img.isBlank && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openEditor(img.id, 'crop');
+                            }}
+                            className="p-1.5 rounded text-white/90 hover:text-white hover:bg-white/15 transition-colors"
+                            title={t.tabCrop}
+                          >
+                            <CropIcon size={13} />
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            setEditingId(img.id);
+                            openEditor(img.id, 'enhance');
                           }}
                           className="p-1.5 rounded text-white/90 hover:text-white hover:bg-white/15 transition-colors"
                           title={t.editPage}
@@ -1301,6 +1702,7 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
                     {t.tabEnhance}...
                   </option>
                   <option value="none">{t.filterNone}</option>
+                  <option value="cleanDoc">{t.filterCleanDoc}</option>
                   <option value="grayscale">{t.filterGrayscale}</option>
                   <option value="bw">{t.filterBwScan}</option>
                   <option value="enhance">{t.filterEnhance}</option>
@@ -1308,7 +1710,10 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
               </div>
               {selectedIds.size === 1 && (
                 <button
-                  onClick={() => setEditingId(Array.from(selectedIds)[0])}
+                  onClick={() => {
+                    const firstId = Array.from(selectedIds)[0];
+                    if (typeof firstId === 'string') openEditor(firstId, 'crop');
+                  }}
                   className="w-full py-1.5 px-3 rounded-lg border border-blue-300 bg-white hover:bg-blue-50 text-blue-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
                 >
                   <SlidersHorizontal size={13} />
@@ -1556,10 +1961,12 @@ export function ImageToPdfWorkspace({ t, onNotify }: ImageToPdfWorkspaceProps) {
         <ImageDetailModal
           items={images}
           activeId={editingId}
+          initialTab={editingTab}
           globalSettings={settings}
           onSelectId={setEditingId}
           onUpdate={updateImage}
-          onApplyFilterToAll={handleApplyFilterToAll}
+          onApplyEnhanceToAll={handleApplyEnhanceToAll}
+          onNotify={onNotify}
           onClose={() => setEditingId(null)}
           t={t}
         />

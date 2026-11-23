@@ -114,6 +114,7 @@ export interface Dictionary {
   filterGrayscale: string;
   filterBwScan: string;
   filterEnhance: string;
+  filterCleanDoc: string;
   brightness: string;
   contrast: string;
   cropFree: string;
@@ -123,6 +124,92 @@ export interface Dictionary {
   nextPage: string;
   applyFilterToAll: string;
   filterAppliedAll: string;
+
+  // Smart Auto-Trim & Irregular Cropping
+  autoTrimOnUpload: string;
+  autoTrimAll: string;
+  autoTrimSelected: string;
+  autoTrimDetect: string;
+  autoTrimResultToast: string;
+  autoTrimNoneFound: string;
+  autoTrimSensitivity: string;
+  autoTrimPadding: string;
+  restoreCrop: string;
+  cropModeRect: string;
+  cropModePerspective: string;
+  cropModePolygon: string;
+  perspectiveDetect: string;
+  perspectiveReset: string;
+  perspectiveHint: string;
+  perspectiveApply: string;
+  polygonInitQuad: string;
+  polygonUndoPoint: string;
+  polygonClear: string;
+  polygonCloseShape: string;
+  polygonFillLabel: string;
+  polygonFillWhite: string;
+  polygonFillTransparent: string;
+  polygonHint: string;
+  polygonPointsCount: string;
+  polygonApply: string;
+  tagAutoTrim: string;
+  tagPerspective: string;
+  tagPolygon: string;
+  tagCropped: string;
+  tagSharpen: string;
+  tagHd: string;
+  tagDeWatermark: string;
+  tagAi: string;
+
+  // Local Enhance, Sharpen, HD, Watermark & Brush
+  localEngineTitle: string;
+  sharpen: string;
+  denoiseShadow: string;
+  localUpscale: string;
+  localUpscaleDesc: string;
+  localWatermark: string;
+  watermarkStrength: string;
+  removeColorStamps: string;
+  eraserBrush: string;
+  eraserBrushActive: string;
+  eraserBrushHint: string;
+  brushSize: string;
+  undoStroke: string;
+  clearStrokes: string;
+  compareBeforeAfter: string;
+  beforeLabel: string;
+  afterLabel: string;
+
+  // AI Deep Restoration
+  aiEngineTitle: string;
+  aiEngineNote: string;
+  aiWatermarkBtn: string;
+  aiHdBtn: string;
+  aiBothBtn: string;
+  aiProcessingWatermark: string;
+  aiProcessingHd: string;
+  aiProcessingBoth: string;
+  aiAcceptResult: string;
+  aiDiscardResult: string;
+  aiLayerActive: string;
+  aiLayerPaused: string;
+  aiRemoveLayer: string;
+  aiKeyMissingTip: string;
+  aiKeyInvalidTip: string;
+  aiQuotaTip: string;
+  aiDoneToast: string;
+
+  // Batch Enhancement
+  batchEnhance: string;
+  batchCleanDoc: string;
+  batchBwScan: string;
+  batchLocalWatermark: string;
+  batchLocalHd: string;
+  batchResetEnhance: string;
+  batchAiAction: string;
+  batchAiProgress: string;
+  batchAiStop: string;
+  batchEnhancedToast: string;
 
   // Extract & Organize Mode
   extractTitle: string;
@@ -259,21 +346,104 @@ const zh: Dictionary = {
 
   editorTitle: '单页精修编辑器',
   tabTransform: '排版与变换',
-  tabCrop: '自由裁剪',
-  tabEnhance: '扫描增强',
+  tabCrop: '智能裁剪',
+  tabEnhance: '画质与去水印',
   filterNone: '原图色彩',
   filterGrayscale: '灰度文档',
-  filterBwScan: '黑白扫描增强',
-  filterEnhance: '清晰锐化提亮',
+  filterBwScan: '黑白扫描',
+  filterEnhance: '清晰提亮',
+  filterCleanDoc: '洁白文档',
   brightness: '亮度',
   contrast: '对比度',
   cropFree: '自由比例',
   cropReset: '恢复全图',
-  cropHint: '拖拽边框或四角调整裁剪区域',
+  cropHint: '拖拽边框或四角微调，支持一键自动切白边',
   prevPage: '上一页',
   nextPage: '下一页',
-  applyFilterToAll: '将当前滤镜应用至全部图片',
-  filterAppliedAll: '已将色彩滤镜同步应用至全部图片',
+  applyFilterToAll: '同步当前本地增强至全部图片',
+  filterAppliedAll: '已将画质增强参数同步应用至全部图片',
+
+  autoTrimOnUpload: '上传自动切白边',
+  autoTrimAll: '一键切白边',
+  autoTrimSelected: '自动切白边',
+  autoTrimDetect: '自动检测白边',
+  autoTrimResultToast: '已自动裁剪 {n} 张图片的白边',
+  autoTrimNoneFound: '未检测到明显多余白边',
+  autoTrimSensitivity: '白边检测敏感度',
+  autoTrimPadding: '安全留白',
+  restoreCrop: '还原裁剪',
+  cropModeRect: '矩形切边',
+  cropModePerspective: '四点透视',
+  cropModePolygon: '自由多边形',
+  perspectiveDetect: '自动识别四角',
+  perspectiveReset: '重置四角',
+  perspectiveHint: '拖动 4 个角点贴合倾斜文档边缘，拖动时自动开启 2.5× 放大镜',
+  perspectiveApply: '应用透视拉正',
+  polygonInitQuad: '从四角初始化',
+  polygonUndoPoint: '撤销顶点',
+  polygonClear: '清空重描',
+  polygonCloseShape: '闭合选区',
+  polygonFillLabel: '选区外背景填充',
+  polygonFillWhite: '纯白纸底',
+  polygonFillTransparent: '透明背景',
+  polygonHint: '点击画面逐点描边，点击首点闭合；拖拽顶点调整，点击边中点插点，右键删点',
+  polygonPointsCount: '顶点数',
+  polygonApply: '应用不规则裁剪',
+  tagAutoTrim: '已切白边',
+  tagPerspective: '透视拉正',
+  tagPolygon: '多边形',
+  tagCropped: '已裁剪',
+  tagSharpen: '锐化',
+  tagHd: '2×高清',
+  tagDeWatermark: '去水印',
+  tagAi: 'AI修复',
+
+  localEngineTitle: '本地极速增强（离线零等待）',
+  sharpen: '文字锐化',
+  denoiseShadow: '去阴影 / 纸底漂白',
+  localUpscale: '本地 2× 高清超分',
+  localUpscaleDesc: '平滑放大并压实模糊文字笔画',
+  localWatermark: '本地去浅色水印',
+  watermarkStrength: '去水印强度',
+  removeColorStamps: '同时剔除彩色印章 / 淡彩底纹',
+  eraserBrush: '手动擦除画笔',
+  eraserBrushActive: '退出擦除画笔',
+  eraserBrushHint: '按住左键涂抹局部残余水印或污渍，自动按周围纸底修复',
+  brushSize: '画笔粗细',
+  undoStroke: '撤销一笔',
+  clearStrokes: '清空涂抹',
+  compareBeforeAfter: '前后分屏对比',
+  beforeLabel: '处理前',
+  afterLabel: '处理后',
+
+  aiEngineTitle: 'AI 深度修复（Gemini 图像引擎）',
+  aiEngineNote: '针对复杂文字水印与严重模糊照片，需在 Settings > Secrets 配置付费 API Key',
+  aiWatermarkBtn: 'AI 深度去水印',
+  aiHdBtn: 'AI 超清重建 2K',
+  aiBothBtn: 'AI 去水印 + 超清',
+  aiProcessingWatermark: '正在执行 AI 深度去水印...',
+  aiProcessingHd: '正在执行 AI 超清文字重建 (2K)...',
+  aiProcessingBoth: '正在执行 AI 去水印与超清修复...',
+  aiAcceptResult: '采用 AI 结果',
+  aiDiscardResult: '放弃',
+  aiLayerActive: '已启用 AI 修复层',
+  aiLayerPaused: '暂看本地版本',
+  aiRemoveLayer: '移除 AI 层',
+  aiKeyMissingTip: '尚未配置 Gemini API Key。请在 Settings > Secrets 中填写 GEMINI_API_KEY 后再使用 AI 深度修复，当前可先使用上方免费的本地去水印与本地 2× 高清。',
+  aiKeyInvalidTip: 'Gemini API Key 无效或权限不足，请在 Settings > Secrets 检查您的付费密钥。',
+  aiQuotaTip: '当前 API 配额不足或需要付费密钥，请在 Settings > Secrets 检查密钥状态。',
+  aiDoneToast: 'AI 修复完成，可拖动中线对比效果后点击采用',
+
+  batchEnhance: '批量增强',
+  batchCleanDoc: '洁白文档 + 文字锐化',
+  batchBwScan: '黑白高反差扫描',
+  batchLocalWatermark: '本地去浅色水印',
+  batchLocalHd: '开启本地 2× 高清',
+  batchResetEnhance: '重置画质增强',
+  batchAiAction: '批量 AI 修复',
+  batchAiProgress: '正在批量 AI 修复 {cur} / {total}',
+  batchAiStop: '停止剩余',
+  batchEnhancedToast: '已对选中图片应用批量增强',
 
   extractTitle: '可视化页面提取与重排',
   extractAction: '提取并生成 PDF',
@@ -408,21 +578,104 @@ const en: Dictionary = {
 
   editorTitle: 'Page Studio Editor',
   tabTransform: 'Layout & Transform',
-  tabCrop: 'Visual Crop',
-  tabEnhance: 'Scan Enhance',
+  tabCrop: 'Smart Crop',
+  tabEnhance: 'Enhance & Clean',
   filterNone: 'Original',
   filterGrayscale: 'Grayscale',
-  filterBwScan: 'B&W Document Scan',
-  filterEnhance: 'Crisp Enhance',
+  filterBwScan: 'B&W Scan',
+  filterEnhance: 'Crisp Boost',
+  filterCleanDoc: 'Clean Paper',
   brightness: 'Brightness',
   contrast: 'Contrast',
   cropFree: 'Freeform',
   cropReset: 'Reset Crop',
-  cropHint: 'Drag corners or edges to crop before PDF export',
+  cropHint: 'Drag edges or corners to crop, or auto-trim white borders',
   prevPage: 'Previous',
   nextPage: 'Next',
-  applyFilterToAll: 'Apply filter to all images',
-  filterAppliedAll: 'Filter applied to all images',
+  applyFilterToAll: 'Sync local enhancements to all pages',
+  filterAppliedAll: 'Enhancement settings synced to all images',
+
+  autoTrimOnUpload: 'Auto-Trim White Borders',
+  autoTrimAll: 'Auto-Trim All',
+  autoTrimSelected: 'Auto-Trim Borders',
+  autoTrimDetect: 'Detect White Borders',
+  autoTrimResultToast: 'Auto-trimmed white borders on {n} image(s)',
+  autoTrimNoneFound: 'No excess white borders detected',
+  autoTrimSensitivity: 'Border Sensitivity',
+  autoTrimPadding: 'Safe Margin',
+  restoreCrop: 'Restore Crop',
+  cropModeRect: 'Rect Trim',
+  cropModePerspective: '4-Pt Deskew',
+  cropModePolygon: 'Free Polygon',
+  perspectiveDetect: 'Auto-Detect Corners',
+  perspectiveReset: 'Reset Corners',
+  perspectiveHint: 'Drag 4 corners onto the document edges — 2.5× magnifier activates while dragging',
+  perspectiveApply: 'Apply Deskew',
+  polygonInitQuad: 'Init from 4 Corners',
+  polygonUndoPoint: 'Undo Point',
+  polygonClear: 'Clear Points',
+  polygonCloseShape: 'Close Shape',
+  polygonFillLabel: 'Outside Fill',
+  polygonFillWhite: 'White Paper',
+  polygonFillTransparent: 'Transparent',
+  polygonHint: 'Click to place vertices, click first point to close; drag vertices, click edge midpoints to insert, right-click to delete',
+  polygonPointsCount: 'Vertices',
+  polygonApply: 'Apply Polygon Crop',
+  tagAutoTrim: 'Trimmed',
+  tagPerspective: 'Deskewed',
+  tagPolygon: 'Polygon',
+  tagCropped: 'Cropped',
+  tagSharpen: 'Sharp',
+  tagHd: '2× HD',
+  tagDeWatermark: 'Clean WM',
+  tagAi: 'AI',
+
+  localEngineTitle: 'Local Fast Engine (Instant · Offline)',
+  sharpen: 'Text Sharpen',
+  denoiseShadow: 'Shadow / Paper Bleaching',
+  localUpscale: 'Local 2× HD Upscale',
+  localUpscaleDesc: 'Smooth 2× upscale with crisp text edge contrast',
+  localWatermark: 'Local Light Watermark Removal',
+  watermarkStrength: 'Removal Strength',
+  removeColorStamps: 'Also suppress colored stamps & grids',
+  eraserBrush: 'Manual Healing Brush',
+  eraserBrushActive: 'Exit Healing Brush',
+  eraserBrushHint: 'Paint over residual watermarks or marks to heal with surrounding paper tone',
+  brushSize: 'Brush Size',
+  undoStroke: 'Undo Stroke',
+  clearStrokes: 'Clear Strokes',
+  compareBeforeAfter: 'Before / After Split',
+  beforeLabel: 'Before',
+  afterLabel: 'After',
+
+  aiEngineTitle: 'AI Deep Restoration (Gemini Vision)',
+  aiEngineNote: 'For heavy text watermarks & blurry photos. Requires GEMINI_API_KEY in Settings > Secrets.',
+  aiWatermarkBtn: 'AI Remove Watermark',
+  aiHdBtn: 'AI HD Rebuild 2K',
+  aiBothBtn: 'AI Watermark + HD',
+  aiProcessingWatermark: 'Running AI deep watermark removal...',
+  aiProcessingHd: 'Rebuilding ultra-crisp 2K text...',
+  aiProcessingBoth: 'Running AI watermark removal & 2K HD...',
+  aiAcceptResult: 'Apply AI Result',
+  aiDiscardResult: 'Discard',
+  aiLayerActive: 'AI Layer Active',
+  aiLayerPaused: 'Viewing Local Layer',
+  aiRemoveLayer: 'Remove AI Layer',
+  aiKeyMissingTip: 'GEMINI_API_KEY is not configured yet. Add your key in Settings > Secrets to enable AI restoration, or use the free local watermark & 2× HD tools above.',
+  aiKeyInvalidTip: 'Gemini API key is invalid or lacks permission. Please verify it in Settings > Secrets.',
+  aiQuotaTip: 'API quota exceeded or billing-enabled key required. Please check Settings > Secrets.',
+  aiDoneToast: 'AI restoration ready — drag the divider to compare, then click Apply',
+
+  batchEnhance: 'Batch Enhance',
+  batchCleanDoc: 'Clean Paper + Sharpen',
+  batchBwScan: 'B&W High-Contrast Scan',
+  batchLocalWatermark: 'Remove Light Watermark',
+  batchLocalHd: 'Enable Local 2× HD',
+  batchResetEnhance: 'Reset Enhancements',
+  batchAiAction: 'Batch AI Restore',
+  batchAiProgress: 'Batch AI restoring {cur} / {total}',
+  batchAiStop: 'Stop Remaining',
+  batchEnhancedToast: 'Batch enhancement applied to selected images',
 
   extractTitle: 'Visual Page Organizer & Extractor',
   extractAction: 'Extract PDF',

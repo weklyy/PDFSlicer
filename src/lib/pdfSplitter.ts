@@ -1,10 +1,24 @@
 import { PDFDocument, StandardFonts, degrees, rgb } from 'pdf-lib';
+import {
+  AiEnhancedResult,
+  CropMode,
+  EraseStroke,
+  PerspectiveQuad,
+  Point2D,
+  PolygonFillMode,
+  WatermarkRemovalSettings,
+  estimateQuadOutputSize,
+  getPolygonBounds,
+  hasAdvancedPixelEdits,
+  isConvexQuad,
+  renderProcessedImageCanvas,
+} from './imageProcessor';
 
 export type PaperSizeKey = 'a4' | 'a3' | 'letter' | 'legal' | 'auto';
 export type OrientationKey = 'auto' | 'portrait' | 'landscape';
 export type MarginPreset = 'none' | 'narrow' | 'normal' | 'wide';
 export type ScaleType = 'fit' | 'fill' | 'original';
-export type ImageFilterType = 'none' | 'grayscale' | 'bw' | 'enhance';
+export type ImageFilterType = 'none' | 'grayscale' | 'bw' | 'enhance' | 'cleanDoc';
 export type QualityPreset = 'original' | 'high' | 'balanced' | 'compact';
 export type PageNumberPosition = 'none' | 'center' | 'right';
 
@@ -54,6 +68,21 @@ export interface ImageItem {
   brightness: number; // 50..150, default 100
   contrast: number; // 50..150, default 100
   crop: CropRect | null;
+
+  // Extended Smart Document Crop & Enhancement State
+  cropMode?: CropMode;
+  autoTrimApplied?: boolean;
+  autoTrimSensitivity?: number;
+  autoTrimPadding?: number;
+  perspectiveQuad?: PerspectiveQuad | null;
+  polygon?: Point2D[] | null;
+  polygonFill?: PolygonFillMode;
+  sharpen?: number; // 0..100
+  denoiseShadow?: number; // 0..100
+  localUpscale?: boolean;
+  watermarkRemoval?: WatermarkRemovalSettings;
+  eraseStrokes?: EraseStroke[];
+  aiEnhanced?: AiEnhancedResult | null;
 }
 
 export interface GlobalImagePdfSettings {
@@ -261,11 +290,29 @@ export function resolveImagePageLayout(
   if (overrideImgSize) {
     effImgW = Math.max(1, overrideImgSize.width);
     effImgH = Math.max(1, overrideImgSize.height);
+  } else if (item.aiEnhanced?.active && item.aiEnhanced.width > 0 && item.aiEnhanced.height > 0) {
+    effImgW = item.aiEnhanced.width;
+    effImgH = item.aiEnhanced.height;
   } else {
     const baseW = item.naturalWidth || 595;
     const baseH = item.naturalHeight || 842;
-    const cropW = item.crop ? item.crop.w * baseW : baseW;
-    const cropH = item.crop ? item.crop.h * baseH : baseH;
+    const cropMode = item.cropMode || (item.crop ? 'rect' : 'none');
+
+    let cropW = baseW;
+    let cropH = baseH;
+    if (cropMode === 'perspective' && item.perspectiveQuad && isConvexQuad(item.perspectiveQuad)) {
+      const est = estimateQuadOutputSize(item.perspectiveQuad, baseW, baseH);
+      cropW = est.width;
+      cropH = est.height;
+    } else if (cropMode === 'polygon' && item.polygon && item.polygon.length >= 3) {
+      const b = getPolygonBounds(item.polygon);
+      cropW = b.w * baseW;
+      cropH = b.h * baseH;
+    } else if (cropMode === 'rect' && item.crop) {
+      cropW = item.crop.w * baseW;
+      cropH = item.crop.h * baseH;
+    }
+
     const rot = ((item.rotation % 360) + 360) % 360;
     const swapped = rot === 90 || rot === 270;
     effImgW = Math.max(1, swapped ? cropH : cropW);
@@ -381,28 +428,12 @@ function hasNonNormalExifOrientation(buffer: ArrayBuffer): boolean {
   return false;
 }
 
-function loadHtmlImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = (e) => reject(e);
-    img.src = src;
-  });
-}
-
 async function renderProcessedImageBytes(
   item: ImageItem,
   quality: QualityPreset
 ): Promise<{ bytes: Uint8Array; format: 'jpg' | 'png'; width: number; height: number }> {
   let needsCanvas =
-    Boolean(item.crop) ||
-    item.flipH ||
-    item.flipV ||
-    item.rotation % 360 !== 0 ||
-    item.filter !== 'none' ||
-    item.brightness !== 100 ||
-    item.contrast !== 100 ||
+    hasAdvancedPixelEdits(item) ||
     quality !== 'original' ||
     !item.file ||
     !['image/jpeg', 'image/jpg', 'image/png'].includes(item.file.type.toLowerCase());
@@ -422,62 +453,22 @@ async function renderProcessedImageBytes(
     }
   }
 
-  const htmlImg = await loadHtmlImage(item.url);
-  const srcW = htmlImg.naturalWidth;
-  const srcH = htmlImg.naturalHeight;
-
-  // Source crop in pixel space
-  const sx = item.crop ? Math.round(item.crop.x * srcW) : 0;
-  const sy = item.crop ? Math.round(item.crop.y * srcH) : 0;
-  const sw = item.crop ? Math.max(1, Math.round(item.crop.w * srcW)) : srcW;
-  const sh = item.crop ? Math.max(1, Math.round(item.crop.h * srcH)) : srcH;
-
-  // Resolution scaling for compact/balanced quality
   const maxDim =
     quality === 'compact' ? 1600 : quality === 'balanced' ? 2200 : quality === 'high' ? 3200 : 4096;
-  const downscale = Math.min(1, maxDim / Math.max(sw, sh));
-  const outBaseW = Math.max(1, Math.round(sw * downscale));
-  const outBaseH = Math.max(1, Math.round(sh * downscale));
 
-  const rot = ((item.rotation % 360) + 360) % 360;
-  const swap = rot === 90 || rot === 270;
-  const canvasW = swap ? outBaseH : outBaseW;
-  const canvasH = swap ? outBaseW : outBaseH;
+  const isTransparentPolygon =
+    !item.aiEnhanced?.active &&
+    item.cropMode === 'polygon' &&
+    item.polygonFill === 'transparent';
 
-  const canvas = document.createElement('canvas');
-  canvas.width = canvasW;
-  canvas.height = canvasH;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Canvas 2D context unavailable');
+  const useJpeg =
+    !isTransparentPolygon &&
+    (quality !== 'original' || item.file?.type.toLowerCase() !== 'image/png');
 
-  // White background for JPEG output (avoids black transparent areas)
-  const useJpeg = quality !== 'original' || item.file?.type.toLowerCase() !== 'image/png';
-  if (useJpeg) {
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(0, 0, canvasW, canvasH);
-  }
-
-  // Build CSS filter chain
-  const filters: string[] = [];
-  if (item.filter === 'grayscale') {
-    filters.push('grayscale(100%)');
-  } else if (item.filter === 'bw') {
-    filters.push('grayscale(100%)', 'contrast(185%)', 'brightness(112%)');
-  } else if (item.filter === 'enhance') {
-    filters.push('contrast(120%)', 'saturate(112%)', 'brightness(104%)');
-  }
-  if (item.brightness !== 100) filters.push(`brightness(${item.brightness}%)`);
-  if (item.contrast !== 100) filters.push(`contrast(${item.contrast}%)`);
-  if (filters.length > 0) {
-    ctx.filter = filters.join(' ');
-  }
-
-  ctx.save();
-  ctx.translate(canvasW / 2, canvasH / 2);
-  ctx.rotate((rot * Math.PI) / 180);
-  ctx.scale(item.flipH ? -1 : 1, item.flipV ? -1 : 1);
-  ctx.drawImage(htmlImg, sx, sy, sw, sh, -outBaseW / 2, -outBaseH / 2, outBaseW, outBaseH);
-  ctx.restore();
+  const canvas = await renderProcessedImageCanvas(item, {
+    maxDim,
+    backgroundFill: useJpeg ? '#FFFFFF' : undefined,
+  });
 
   const jpegQuality =
     quality === 'compact' ? 0.58 : quality === 'balanced' ? 0.78 : quality === 'high' ? 0.91 : 0.95;
@@ -494,8 +485,8 @@ async function renderProcessedImageBytes(
   return {
     bytes,
     format: useJpeg ? 'jpg' : 'png',
-    width: canvasW,
-    height: canvasH,
+    width: canvas.width,
+    height: canvas.height,
   };
 }
 

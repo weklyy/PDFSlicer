@@ -4,9 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port=3000 --host=0.0.0.0",
+    "dev": "tsx server.ts",
+    "start": "node server.ts",
     "build": "vite build",
-    "preview": "npm run build && wrangler dev",
+    "preview": "npm run build && NODE_ENV=production tsx server.ts",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "deploy": "npm run build && wrangler deploy"
